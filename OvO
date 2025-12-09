@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>OvO Replica: The Final Version</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #202020;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+            color: #fff;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+        }
+        canvas {
+            background-color: #000;
+            border: 4px solid #fff;
+            box-shadow: 0 0 30px rgba(0, 255, 200, 0.1);
+        }
+        #ui {
+            width: 800px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            margin-bottom: 10px;
+            pointer-events: none;
+        }
+        h2 { margin: 0; color: #fff; text-transform: uppercase; }
+        .stat-box { text-align: right; }
+        .controls-hint { font-size: 12px; opacity: 0.7; }
+        #coin-display { color: #ffd700; font-weight: bold; font-size: 20px; }
+    </style>
+</head>
+<body>
+
+<div id="ui">
+    <div>
+        <h2 id="level-title">LEVEL 1</h2>
+        <div class="controls-hint">ARROWS to Move | DOWN to Slide/Dive</div>
+    </div>
+    <div class="stat-box">
+        <div id="coin-display">COINS: 0</div>
+        <div id="status">Status: Alive</div>
+    </div>
+</div>
+
+<canvas id="gameCanvas" width="800" height="450"></canvas>
+
+<script>
+/* --- ENGINE CONFIGURATION --- */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const uiLevel = document.getElementById('level-title');
+const uiCoins = document.getElementById('coin-display');
+
+const PHYSICS = {
+    gravity: 0.6,
+    accel: 0.8,
+    friction: 0.82,
+    airResistance: 0.95,
+    slideFriction: 0.99,
+    jumpForce: -12,
+    wallJumpForceX: 10,
+    wallJumpForceY: -13,
+    diveSpeed: 18
+};
+
+const player = {
+    x: 50, y: 300, w: 30, h: 30,
+    normalH: 30, slideH: 15,
+    vx: 0, vy: 0,
+    grounded: false,
+    wallTouching: null,
+    state: 'idle',
+    score: 0
+};
+
+/* --- LEVEL DATA --- */
+const LEVELS = [
+    {
+        id: 1, name: "The Basics",
+        spawn: { x: 50, y: 350 },
+        goal:  { x: 720, y: 350, w: 40, h: 40 },
+        walls: [
+            { x: 0, y: 400, w: 800, h: 50 },
+            { x: -50, y: 0, w: 50, h: 450 }, { x: 800, y: 0, w: 50, h: 450 },
+            { x: 300, y: 250, w: 200, h: 20 },
+            { x: 550, y: 150, w: 100, h: 20 }
+        ],
+        hazards: [
+            { x: 200, y: 370, w: 30, h: 30, type: 'spike' },
+            { x: 230, y: 370, w: 30, h: 30, type: 'spike' }
+        ],
+        coins: [
+            { x: 350, y: 200, r: 10, collected: false },
+            { x: 600, y: 100, r: 10, collected: false }
+        ]
+    },
+    {
+        id: 2, name: "Wall Jump Mania",
+        spawn: { x: 50, y: 350 },
+        goal:  { x: 750, y: 50, w: 30, h: 30 },
+        walls: [
+            { x: 0, y: 400, w: 800, h: 50 },
+            { x: -50, y: 0, w: 50, h: 450 }, { x: 800, y: 0, w: 50, h: 450 },
+            { x: 200, y: 200, w: 40, h: 200 }, // Wall to jump off
+            { x: 500, y: 100, w: 40, h: 300 }  // Another wall
+        ],
+        hazards: [
+            { x: 250, y: 370, w: 30, h: 30, type: 'spike' },
+            { x: 280, y: 370, w: 30, h: 30, type: 'spike' }
+        ],
+        coins: [
+            { x: 180, y: 250, r: 10, collected: false }, // Left of first wall
+            { x: 480, y: 150, r: 10, collected: false }, // Left of second wall
+            { x: 560, y: 350, r: 10, collected: false }  // Behind second wall
+        ]
+    },
+    {
+        id: 3, name: "Slide or Die",
+        spawn: { x: 50, y: 350 },
+        goal:  { x: 750, y: 350, w: 30, h: 30 },
+        walls: [
+            { x: 0, y: 400, w: 800, h: 50 },
+            { x: -50, y: 0, w: 50, h: 450 }, { x: 800, y: 0, w: 50, h: 450 },
+            { x: 200, y: 340, w: 400, h: 20 }, // Low ceiling
+            { x: 200, y: 300, w: 20, h: 40 }   // Entrance blocker
+        ],
+        hazards: [
+            { x: 300, y: 340, w: 30, h: 30, type: 'spike', flip: true }, // Ceiling spikes
+            { x: 400, y: 340, w: 30, h: 30, type: 'spike', flip: true },
+            { x: 500, y: 340, w: 30, h: 30, type: 'spike', flip: true },
+            { x: 250, y: 260, w: 40, h: 40, type: 'patrol', minX: 220, maxX: 550, speed: 6, dir: 1 }
+        ],
+        coins: [
+            { x: 350, y: 370, r: 10, collected: false }, // Inside tunnel
+            { x: 450, y: 370, r: 10, collected: false }, // Inside tunnel
+            { x: 400, y: 200, r: 10, collected: false }  // Above tunnel (dangerous!)
+        ]
+    }
+];
+
+let currentLevelIndex = 0;
+let currentLevel = null;
+let shakeTime = 0;
+
+/* --- INPUT HANDLING --- */
+const keys = {};
+window.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    if (e.code === 'ArrowUp') jump();
+    if (e.code === 'KeyR') loadLevel(currentLevelIndex);
+});
+window.addEventListener('keyup', e => keys[e.code] = false);
+
+function jump() {
+    if (player.grounded) {
+        player.vy = PHYSICS.jumpForce;
+        player.grounded = false;
+    } else if (player.wallTouching) {
+        player.vy = PHYSICS.wallJumpForceY;
+        player.vx = (player.wallTouching === 'left') ? PHYSICS.wallJumpForceX : -PHYSICS.wallJumpForceX;
+    }
+}
+
+function loadLevel(index) {
+    if (index >= LEVELS.length) {
+        alert(`GAME COMPLETE! Total Coins: ${player.score}`);
+        index = 0;
+        player.score = 0;
+    }
+    currentLevelIndex = index;
+    // Deep clone to reset coins/patrols
+    currentLevel = JSON.parse(JSON.stringify(LEVELS[index]));
+    
+    uiLevel.innerText = `${index + 1}: ${currentLevel.name}`;
+    uiCoins.innerText = `COINS: ${player.score}`;
+    
+    player.x = currentLevel.spawn.x;
+    player.y = currentLevel.spawn.y;
+    player.vx = 0; player.vy = 0;
+    player.state = 'idle';
+}
+
+function update() {
+    // 1. Movement
+    if (player.state !== 'sliding') {
+        if (keys.ArrowRight) player.vx += PHYSICS.accel;
+        if (keys.ArrowLeft)  player.vx -= PHYSICS.accel;
+    }
+
+    // 2. Slide / Dive
+    if (keys.ArrowDown) {
+        if (!player.grounded) {
+            player.vy = PHYSICS.diveSpeed;
+            player.state = 'diving';
+        } else {
+            player.h = player.slideH;
+            player.state = 'sliding';
+            if (Math.abs(player.vx) < 1 && Math.abs(player.vx) > 0.1) player.vx *= 1.2;
+        }
+    } else {
+        player.h = player.normalH;
+        player.state = player.grounded ? 'run' : 'jump';
+    }
+
+    // 3. Physics
+    if (player.grounded) {
+        player.vx *= (player.state === 'sliding') ? PHYSICS.slideFriction : PHYSICS.friction;
+    } else {
+        player.vx *= PHYSICS.airResistance;
+    }
+    player.vy += PHYSICS.gravity;
+
+    player.x += player.vx;
+    checkWalls('x');
+    player.y += player.vy;
+    player.grounded = false;
+    checkWalls('y');
+
+    // 4. Game Elements
+    updateHazards();
+    checkCoins();
+
+    // 5. Conditions
+    if (checkDeath() || player.y > canvas.height + 100) {
+        shakeTime = 10;
+        loadLevel(currentLevelIndex);
+    }
+    
+    // Goal Check
+    let g = currentLevel.goal;
+    if (rectIntersect(player.x, player.y, player.w, player.h, g.x, g.y, g.w, g.h)) {
+        loadLevel(currentLevelIndex + 1);
+    }
+    
+    if (shakeTime > 0) shakeTime--;
+}
+
+function checkWalls(axis) {
+    player.wallTouching = null;
+    for (let w of currentLevel.walls) {
+        if (rectIntersect(player.x, player.y, player.w, player.h, w.x, w.y, w.w, w.h)) {
+            if (axis === 'x') {
+                if (player.vx > 0) { player.x = w.x - player.w; player.wallTouching = 'right'; }
+                else if (player.vx < 0) { player.x = w.x + w.w; player.wallTouching = 'left'; }
+                player.vx = 0;
+            } else {
+                if (player.vy > 0) { player.y = w.y - player.h; player.grounded = true; player.vy = 0; }
+                else if (player.vy < 0) { player.y = w.y + w.h; player.vy = 0; }
+            }
+        }
+    }
+}
+
+function updateHazards() {
+    for (let h of currentLevel.hazards) {
+        if (h.type === 'patrol') {
+            h.x += h.speed * h.dir;
+            if (h.x >= h.maxX || h.x <= h.minX) h.dir *= -1;
+        }
+    }
+}
+
+function checkCoins() {
+    for (let c of currentLevel.coins) {
+        if (!c.collected) {
+            // Circle collision check
+            let dx = (player.x + player.w/2) - c.x;
+            let dy = (player.y + player.h/2) - c.y;
+            if (Math.sqrt(dx*dx + dy*dy) < player.w/2 + c.r) {
+                c.collected = true;
+                player.score++;
+                uiCoins.innerText = `COINS: ${player.score}`;
+            }
+        }
+    }
+}
+
+function checkDeath() {
+    const pad = 6; // Hitbox forgiveness
+    for (let h of currentLevel.hazards) {
+        if (rectIntersect(player.x + pad, player.y + pad, player.w - pad*2, player.h - pad*2, h.x, h.y, h.w, h.h)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function rectIntersect(x1, y1, w1, h1, x2, y2, w2, h2) {
+    return x2 < x1 + w1 && x2 + w2 > x1 && y2 < y1 + h1 && y2 + h2 > y1;
+}
+
+function draw() {
+    // Shake
+    let dx = 0, dy = 0;
+    if (shakeTime > 0) { dx = (Math.random()-0.5)*10; dy = (Math.random()-0.5)*10; }
+    ctx.save();
+    ctx.translate(dx, dy);
+
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Walls
+    ctx.fillStyle = '#666'; ctx.strokeStyle = '#999'; ctx.lineWidth = 2;
+    for (let w of currentLevel.walls) { ctx.fillRect(w.x, w.y, w.w, w.h); ctx.strokeRect(w.x, w.y, w.w, w.h); }
+
+    // Hazards
+    ctx.fillStyle = '#ff0000';
+    for (let h of currentLevel.hazards) {
+        if (h.type === 'spike') {
+            ctx.beginPath();
+            if (h.flip) { ctx.moveTo(h.x, h.y); ctx.lineTo(h.x+h.w/2, h.y+h.h); ctx.lineTo(h.x+h.w, h.y); } 
+            else { ctx.moveTo(h.x, h.y+h.h); ctx.lineTo(h.x+h.w/2, h.y); ctx.lineTo(h.x+h.w, h.y+h.h); }
+            ctx.fill();
+        } else { ctx.fillRect(h.x, h.y, h.w, h.h); }
+    }
+
+    // Coins
+    ctx.fillStyle = '#ffd700';
+    for (let c of currentLevel.coins) {
+        if (!c.collected) {
+            ctx.beginPath(); ctx.arc(c.x, c.y, c.r, 0, Math.PI*2); ctx.fill();
+            // Shine effect
+            ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(c.x - 3, c.y - 3, 2, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = '#ffd700';
+        }
+    }
+
+    // Goal
+    ctx.fillStyle = '#0f0'; ctx.globalAlpha = 0.6;
+    let g = currentLevel.goal; ctx.fillRect(g.x, g.y, g.w, g.h); ctx.globalAlpha = 1.0;
+
+    // Player
+    ctx.fillStyle = player.state === 'sliding' ? '#ff0055' : '#00ccff';
+    if (player.state === 'diving') ctx.fillStyle = '#ffaa00';
+    ctx.fillRect(player.x, player.y, player.w, player.h);
+
+    ctx.restore();
+}
+
+function loop() { update(); draw(); requestAnimationFrame(loop); }
+loadLevel(0); loop();
+</script>
+</body>
+</html>
